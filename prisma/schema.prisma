@@ -1,0 +1,222 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+    provider        = "prisma-client-js"
+    previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+    provider   = "postgresql"
+    url        = env("DATABASE_URL")
+    directUrl  = env("DIRECT_URL")
+    extensions = [vector]
+}
+
+enum UserRole {
+    ADMIN
+    USER
+}
+
+model Account {
+    id                String   @id @default(cuid())
+    userId            String
+    type              String
+    provider          String
+    providerAccountId String
+    refresh_token     String?  @db.Text
+    access_token      String?  @db.Text
+    expires_at        Int?
+    token_type        String?
+    scope             String?
+    id_token          String?  @db.Text
+    session_state     String?
+    createdAt         DateTime @default(now()) @map(name: "created_at")
+    updatedAt         DateTime @default(now()) @map(name: "updated_at")
+
+    user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+    @@unique([provider, providerAccountId])
+    @@index([userId])
+    @@map(name: "accounts")
+}
+
+model Session {
+    id           String   @id @default(cuid())
+    sessionToken String   @unique
+    userId       String
+    expires      DateTime
+    user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+    @@index([userId])
+    @@map(name: "sessions")
+}
+
+model User {
+    id                     String    @id @default(cuid())
+    name                   String?
+    email                  String?   @unique
+    emailVerified          DateTime?
+    image                  String?
+    createdAt              DateTime  @default(now()) @map(name: "created_at")
+    updatedAt              DateTime  @default(now()) @map(name: "updated_at")
+    role                   UserRole  @default(USER)
+    apikey                 String?   @unique @default(cuid())
+    hasCompletedOnboarding Boolean   @default(false)
+    hasAcceptedToS         Boolean   @default(false)
+    hasAcceptedPrivacy     Boolean   @default(false) @map(name: "has_accepted_privacy")
+    hasSeenWelcome         Boolean   @default(false)
+
+    accounts Account[]
+    sessions Session[]
+
+    stripeCustomerId       String?   @unique @map(name: "stripe_customer_id")
+    stripeSubscriptionId   String?   @unique @map(name: "stripe_subscription_id")
+    stripePriceId          String?   @map(name: "stripe_price_id")
+    stripeCurrentPeriodEnd DateTime? @map(name: "stripe_current_period_end")
+
+    AICredit    AICredit?
+    RAGFeedback RAGFeedback[]
+
+    @@map(name: "users")
+}
+
+model VerificationToken {
+    identifier String
+    token      String   @unique
+    expires    DateTime
+
+    @@unique([identifier, token])
+    @@map(name: "verification_tokens")
+}
+
+model AICredit {
+    id                 String                @id @default(cuid())
+    userId             String                @unique
+    balance            Float                 @default(0)
+    lastRefreshDate    DateTime?
+    hasPurchaseHistory Boolean               @default(false)
+    createdAt          DateTime              @default(now())
+    updatedAt          DateTime              @updatedAt
+    user               User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+    transactions       AICreditTransaction[]
+
+    @@map(name: "ai_credits")
+}
+
+model AICreditTransaction {
+    id        String            @id @default(cuid())
+    creditId  String
+    amount    Float
+    type      TransactionType
+    status    TransactionStatus @default(PENDING)
+    metadata  Json?
+    createdAt DateTime          @default(now())
+    updatedAt DateTime          @updatedAt
+    credit    AICredit          @relation(fields: [creditId], references: [id], onDelete: Cascade)
+
+    @@index([creditId])
+    @@map(name: "ai_credit_transactions")
+}
+
+enum TransactionType {
+    PURCHASE
+    USAGE
+    REFUND
+    SUBSCRIPTION_BONUS
+    MONTHLY_REFRESH
+    MONTHLY_RESET
+    MONTHLY_TOPUP
+}
+
+enum TransactionStatus {
+    PENDING
+    COMPLETED
+    FAILED
+    CANCELLED
+}
+
+model TradingKnowledgeEmbedding {
+    id        String                     @id @default(uuid())
+    content   String                     @unique @db.Text
+    embedding Unsupported("vector(768)")
+    metadata  Json
+    category  String // e.g., "PATTERN", "PSYCHOLOGY", "RISK_MANAGEMENT"
+    tags      String[] // For efficient filtering
+    createdAt DateTime                   @default(now())
+    updatedAt DateTime                   @updatedAt
+
+    // Add relation to usage metrics
+    usageMetrics KnowledgeUsageMetrics?
+
+    @@index([category])
+    @@index([tags])
+    @@map("trading_knowledge_embeddings")
+}
+
+model RAGFeedback {
+    id                   String   @id @default(uuid())
+    userId               String
+    queryText            String   @db.Text
+    selectedKnowledge    String[]
+    isRelevant           Boolean
+    feedbackText         String?  @db.Text
+    suggestedImprovement String?  @db.Text
+    createdAt            DateTime @default(now())
+
+    user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+    @@index([userId])
+    @@index([isRelevant])
+    @@map("rag_feedback")
+}
+
+model KnowledgeUsageMetrics {
+    knowledgeId    String   @id
+    usageCount     Int      @default(0)
+    relevanceScore Float    @default(0)
+    lastUsed       DateTime @default(now())
+
+    knowledge TradingKnowledgeEmbedding @relation(fields: [knowledgeId], references: [id], onDelete: Cascade)
+
+    @@index([relevanceScore])
+    @@index([usageCount])
+    @@map("knowledge_usage_metrics")
+}
+
+model AnalysisSession {
+    id        String   @id @default(uuid())
+    userId    String
+    name      String
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    // Analysis history within this session
+    analyses Analysis[]
+
+    @@index([userId])
+}
+
+model Analysis {
+    id        String          @id @default(uuid())
+    sessionId String
+    session   AnalysisSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+    // Analysis data
+    type      String // "OPPORTUNITY" or "GUIDANCE"
+    prompt    String   @db.Text
+    image     String   @db.Text // Base64 image data
+    result    Json // Analysis result
+    createdAt DateTime @default(now())
+
+    @@index([sessionId])
+}
+
+model NewsletterSubscriber {
+    id        String   @id @default(uuid())
+    email     String   @unique
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@map("newsletter_subscribers")
+}
